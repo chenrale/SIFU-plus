@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectModuleManager">
+    <modules>
+      <module fileurl="file://$PROJECT_DIR$/../D-IF_release/.idea/D-IF_release.iml" filepath="$PROJECT_DIR$/../D-IF_release/.idea/D-IF_release.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../OSX/.idea/OSX.iml" filepath="$PROJECT_DIR$/../OSX/.idea/OSX.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/SIFU.iml" filepath="$PROJECT_DIR$/.idea/SIFU.iml" />
+    </modules>
+  </component>
+</project>
