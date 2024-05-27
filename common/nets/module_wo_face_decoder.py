@@ -8,6 +8,7 @@ from main.config import cfg
 import math
 from mmcv.ops.roi_align import roi_align
 
+
 class PositionNet(nn.Module):
     def __init__(self, part, feat_dim=768):
         super(PositionNet, self).__init__()
@@ -28,31 +29,40 @@ class PositionNet(nn.Module):
         self.part = part
 
     def forward(self, img_feat):
-        assert (img_feat.shape[2], img_feat.shape[3]) == (self.hm_shape[1], self.hm_shape[2])
+        # 确保输入张量在正确的设备上
+        device = img_feat.device
+
+        # 转换尺寸以适配空间卷积操作
+        if img_feat.dim() == 3:  # 形状是 [B, N, C]
+            B, N, C = img_feat.shape
+            H, W = 32, 32  # 假设图像被分成32x32个patch
+            img_feat = img_feat.permute(0, 2, 1)  # 转换为 [B, C, N]
+            img_feat = img_feat.contiguous().view(B, C, H, W)  # 重塑为 [B, C, H, W]
+
+        # 插值调整尺寸以匹配热图尺寸
+        img_feat = F.interpolate(img_feat, size=(self.hm_shape[1], self.hm_shape[2]), mode='bilinear',
+                                 align_corners=False)
+
+        # 确保卷积层和所有其他网络组件都在同一设备上
+        self.conv = self.conv.to(device)
         joint_hm = self.conv(img_feat).view(-1, self.joint_num, self.hm_shape[0], self.hm_shape[1], self.hm_shape[2])
         joint_coord = soft_argmax_3d(joint_hm)
         joint_hm = F.softmax(joint_hm.view(-1, self.joint_num, self.hm_shape[0] * self.hm_shape[1] * self.hm_shape[2]),
-                             2)
+                             dim=2)
         joint_hm = joint_hm.view(-1, self.joint_num, self.hm_shape[0], self.hm_shape[1], self.hm_shape[2])
-        if self.part=='hand':
-            img_feat = self.hand_conv(img_feat)
-            img_feat_joints = sample_joint_features(img_feat, joint_coord.detach()[:, :, :2])
-            return joint_hm, joint_coord, img_feat_joints
-        elif self.part=='face':
-            img_feat = self.face_conv(img_feat)
-            img_feat_joints = sample_joint_features(img_feat, joint_coord.detach()[:, :, :2])
-            return joint_hm, joint_coord, img_feat_joints
+
         return joint_hm, joint_coord
 
+
 class HandRotationNet(nn.Module):
-    def __init__(self, part, feat_dim = 768):
+    def __init__(self, part, feat_dim=768):
         super(HandRotationNet, self).__init__()
         self.part = part
         self.joint_num = cfg.hand_pos_joint_num
 
         self.hand_conv = make_linear_layers([feat_dim, 512], relu_final=False)
         self.hand_pose_out = make_linear_layers([self.joint_num * 515, len(smpl_x.orig_joint_part['rhand']) * 6],
-                                                    relu_final=False)
+                                                relu_final=False)
         self.feat_dim = feat_dim
 
     def forward(self, img_feat_joints, joint_coord_img):
@@ -63,14 +73,16 @@ class HandRotationNet(nn.Module):
         hand_pose = self.hand_pose_out(feat.view(batch_size, -1))
         return hand_pose
 
+
 class BodyRotationNet(nn.Module):
-    def __init__(self, feat_dim = 768):
+    def __init__(self, feat_dim=768):
         super(BodyRotationNet, self).__init__()
         self.joint_num = len(smpl_x.pos_joint_part['body'])
         self.body_conv = make_linear_layers([feat_dim, 512], relu_final=False)
-        self.root_pose_out = make_linear_layers([self.joint_num * (512+3), 6], relu_final=False)
+        self.root_pose_out = make_linear_layers([self.joint_num * (512 + 3), 6], relu_final=False)
         self.body_pose_out = make_linear_layers(
-            [self.joint_num * (512+3), (len(smpl_x.orig_joint_part['body']) - 1) * 6], relu_final=False)  # without root
+            [self.joint_num * (512 + 3), (len(smpl_x.orig_joint_part['body']) - 1) * 6],
+            relu_final=False)  # without root
         self.shape_out = make_linear_layers([feat_dim, smpl_x.shape_param_dim], relu_final=False)
         self.cam_out = make_linear_layers([feat_dim, 3], relu_final=False)
         self.feat_dim = feat_dim
@@ -93,6 +105,7 @@ class BodyRotationNet(nn.Module):
 
         return root_pose, body_pose, shape_param, cam_param
 
+
 class FaceRegressor(nn.Module):
     def __init__(self, feat_dim=768):
         super(FaceRegressor, self).__init__()
@@ -103,6 +116,7 @@ class FaceRegressor(nn.Module):
         expr_param = self.expr_out(expr_token)  # expression parameter
         jaw_pose = self.jaw_pose_out(jaw_pose_token)  # jaw pose parameter
         return expr_param, jaw_pose
+
 
 class BoxNet(nn.Module):
     def __init__(self, feat_dim=768):
@@ -115,8 +129,14 @@ class BoxNet(nn.Module):
         self.face_size = make_linear_layers([256, 256, 2], relu_final=False)
 
     def forward(self, img_feat, joint_hm, joint_img=None):
+        device = img_feat.device
+        self.deconv = self.deconv.to(device)
+
+        # 重塑 joint_hm 以确保其与 img_feat 的空间尺寸一致
         joint_hm = joint_hm.view(joint_hm.shape[0], joint_hm.shape[1] * cfg.output_hm_shape[0], cfg.output_hm_shape[1],
                                  cfg.output_hm_shape[2])
+        if joint_hm.shape[2:] != img_feat.shape[2:]:
+            joint_hm = F.interpolate(joint_hm, size=img_feat.shape[2:], mode='bilinear', align_corners=False)
         img_feat = torch.cat((img_feat, joint_hm), 1)
         img_feat = self.deconv(img_feat)
 
@@ -158,15 +178,16 @@ class HandRoI(nn.Module):
     def __init__(self, feat_dim=768, upscale=4):
         super(HandRoI, self).__init__()
         self.deconv = nn.ModuleList([])
-        for i in range(int(math.log2(upscale))+1):
-            if i==0:
-                self.deconv.append(make_conv_layers([feat_dim, feat_dim], kernel=1, stride=1, padding=0, bnrelu_final=False))
-            elif i==1:
-                self.deconv.append(make_deconv_layers([feat_dim, feat_dim//2]))
-            elif i==2:
-                self.deconv.append(make_deconv_layers([feat_dim, feat_dim//2, feat_dim//4]))
-            elif i==3:
-                self.deconv.append(make_deconv_layers([feat_dim, feat_dim//2, feat_dim//4, feat_dim//8]))
+        for i in range(int(math.log2(upscale)) + 1):
+            if i == 0:
+                self.deconv.append(
+                    make_conv_layers([feat_dim, feat_dim], kernel=1, stride=1, padding=0, bnrelu_final=False))
+            elif i == 1:
+                self.deconv.append(make_deconv_layers([feat_dim, feat_dim // 2]))
+            elif i == 2:
+                self.deconv.append(make_deconv_layers([feat_dim, feat_dim // 2, feat_dim // 4]))
+            elif i == 3:
+                self.deconv.append(make_deconv_layers([feat_dim, feat_dim // 2, feat_dim // 4, feat_dim // 8]))
 
     def forward(self, img_feat, lhand_bbox, rhand_bbox):
         lhand_bbox = torch.cat((torch.arange(lhand_bbox.shape[0]).float().cuda()[:, None], lhand_bbox),
@@ -175,18 +196,19 @@ class HandRoI(nn.Module):
                                1)  # batch_idx, xmin, ymin, xmax, ymax
         hand_img_feats = []
         for i, deconv in enumerate(self.deconv):
-            scale = 2**i
+            scale = 2 ** i
             img_feat_i = deconv(img_feat)
             lhand_bbox_roi = lhand_bbox.clone()
             lhand_bbox_roi[:, 1] = lhand_bbox_roi[:, 1] / cfg.input_body_shape[1] * cfg.output_hm_shape[2] * scale
             lhand_bbox_roi[:, 2] = lhand_bbox_roi[:, 2] / cfg.input_body_shape[0] * cfg.output_hm_shape[1] * scale
             lhand_bbox_roi[:, 3] = lhand_bbox_roi[:, 3] / cfg.input_body_shape[1] * cfg.output_hm_shape[2] * scale
             lhand_bbox_roi[:, 4] = lhand_bbox_roi[:, 4] / cfg.input_body_shape[0] * cfg.output_hm_shape[1] * scale
-            assert (cfg.output_hm_shape[1]*scale, cfg.output_hm_shape[2]*scale) == (img_feat_i.shape[2], img_feat_i.shape[3])
+            assert (cfg.output_hm_shape[1] * scale, cfg.output_hm_shape[2] * scale) == (
+            img_feat_i.shape[2], img_feat_i.shape[3])
             lhand_img_feat = roi_align(img_feat_i, lhand_bbox_roi,
-                                                       (cfg.output_hand_hm_shape[1]*scale//2,
-                                                        cfg.output_hand_hm_shape[2]*scale//2),
-                                                       1.0, 0, 'avg', False)
+                                       (cfg.output_hand_hm_shape[1] * scale // 2,
+                                        cfg.output_hand_hm_shape[2] * scale // 2),
+                                       1.0, 0, 'avg', False)
             lhand_img_feat = torch.flip(lhand_img_feat, [3])  # flip to the right hand
 
             rhand_bbox_roi = rhand_bbox.clone()
@@ -195,9 +217,10 @@ class HandRoI(nn.Module):
             rhand_bbox_roi[:, 3] = rhand_bbox_roi[:, 3] / cfg.input_body_shape[1] * cfg.output_hm_shape[2] * scale
             rhand_bbox_roi[:, 4] = rhand_bbox_roi[:, 4] / cfg.input_body_shape[0] * cfg.output_hm_shape[1] * scale
             rhand_img_feat = roi_align(img_feat_i, rhand_bbox_roi,
-                                                       (cfg.output_hand_hm_shape[1]*scale//2,
-                                                        cfg.output_hand_hm_shape[2]*scale//2),
-                                                       1.0, 0, 'avg', False)
-            hand_img_feat = torch.cat((lhand_img_feat, rhand_img_feat))  # [bs, c, cfg.output_hand_hm_shape[2]*scale, cfg.output_hand_hm_shape[1]*scale]
+                                       (cfg.output_hand_hm_shape[1] * scale // 2,
+                                        cfg.output_hand_hm_shape[2] * scale // 2),
+                                       1.0, 0, 'avg', False)
+            hand_img_feat = torch.cat((lhand_img_feat,
+                                       rhand_img_feat))  # [bs, c, cfg.output_hand_hm_shape[2]*scale, cfg.output_hand_hm_shape[1]*scale]
             hand_img_feats.append(hand_img_feat)
-        return hand_img_feats[::-1]   # high resolution -> low resolution
+        return hand_img_feats[::-1]  # high resolution -> low resolution
