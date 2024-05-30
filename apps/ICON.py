@@ -836,9 +836,3 @@ class ICON(pl.LightningModule):
         verts_pr /= (self.resolutions[-1] - 1) / 2.0
 
         return verts_pr, faces_pr, inter
-
-
-    
-
-
-    

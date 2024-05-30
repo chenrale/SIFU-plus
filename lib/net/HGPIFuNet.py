@@ -504,7 +504,3 @@ class HGPIFuNet(BasePIFuNet):
             error = BCEloss
 
         return preds_if_list[-1].detach(), error
-
-
-
-

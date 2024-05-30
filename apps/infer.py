@@ -516,6 +516,7 @@ if __name__ == "__main__":
         for module in model.modules():
             module.to(device)
         in_tensor = {k: v.to(device) for k, v in in_tensor.items()}
+        
 
 
         with torch.no_grad():
@@ -741,7 +742,3 @@ if __name__ == "__main__":
             # final.visual.vertex_colors = final_colors
             final.export(
                 f"{args.out_dir}/{cfg.name}/obj/{data['name']}_refine.obj")
-
-
-
-

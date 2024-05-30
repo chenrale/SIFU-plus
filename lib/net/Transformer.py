@@ -19,7 +19,8 @@ import torch.nn.functional as F
 from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
 
-def get_2d_sincos_pos_embed(embed_dim, grid_size):#获取余弦正弦位置嵌入
+
+def get_2d_sincos_pos_embed(embed_dim, grid_size):  # 获取余弦正弦位置嵌入
     """
     grid_size: int or (int, int) of the grid height and width
     return:
@@ -36,7 +37,8 @@ def get_2d_sincos_pos_embed(embed_dim, grid_size):#获取余弦正弦位置嵌�
 
     return pos_embed
 
-#从网格坐标中生成二维的正弦余弦位置嵌入
+
+# 从网格坐标中生成二维的正弦余弦位置嵌入
 def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
     assert embed_dim % 2 == 0
 
@@ -44,33 +46,34 @@ def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
     emb_h = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[0])  # (H*W, D/2)
     emb_w = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[1])  # (H*W, D/2)
 
-    emb = np.concatenate([emb_h, emb_w], axis=1) # (H*W, D)
+    emb = np.concatenate([emb_h, emb_w], axis=1)  # (H*W, D)
     return emb
 
-#生成一维的余弦和正弦列表
+
+# 生成一维的余弦和正弦列表
 def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     """
     embed_dim: output dimension for each position
     pos: a list of positions to be encoded: size (M,)
     out: (M, D)
     """
-    assert embed_dim % 2 == 0#检查是否符合条件
+    assert embed_dim % 2 == 0  # 检查是否符合条件
     omega = np.arange(embed_dim // 2, dtype=np.float32)
     omega /= embed_dim / 2.
-    omega = 1. / 10000**omega  # (D/2,)
+    omega = 1. / 10000 ** omega  # (D/2,)
 
     pos = pos.reshape(-1)  # (M,)
     out = np.einsum('m,d->md', pos, omega)  # (M, D/2), outer product
 
-    emb_sin = np.sin(out) # (M, D/2)
-    emb_cos = np.cos(out) # (M, D/2)
+    emb_sin = np.sin(out)  # (M, D/2)
+    emb_cos = np.cos(out)  # (M, D/2)
 
     emb = np.concatenate([emb_sin, emb_cos], axis=1)  # (M, D)#拼接
     return emb
 
 
-def init_weights(m):#初始化权重
-    if isinstance(m, nn.Linear):#判断是否是指定类
+def init_weights(m):  # 初始化权重
+    if isinstance(m, nn.Linear):  # 判断是否是指定类
         # we use xavier_uniform following official JAX ViT:
         torch.nn.init.xavier_uniform_(m.weight)
         if m.bias is not None:
@@ -83,7 +86,7 @@ def init_weights(m):#初始化权重
         torch.nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
 
 
-class PreNorm(nn.Module):#它实现了一个预归一化（Pre-Normalization）的模块，用于在输入数据上应用层归一化后再应用其他操作
+class PreNorm(nn.Module):  # 它实现了一个预归一化（Pre-Normalization）的模块，用于在输入数据上应用层归一化后再应用其他操作
     def __init__(self, dim: int, fn: nn.Module) -> None:
         super().__init__()
         self.norm = nn.LayerNorm(dim)
@@ -93,7 +96,7 @@ class PreNorm(nn.Module):#它实现了一个预归一化（Pre-Normalization）�
         return self.fn(self.norm(x), **kwargs)
 
 
-class FeedForward(nn.Module):#实现了一个简单的前馈神经网络（Feedforward Neural Network），用于对输入数据进行非线性变换
+class FeedForward(nn.Module):  # 实现了一个简单的前馈神经网络（Feedforward Neural Network），用于对输入数据进行非线性变换
     def __init__(self, dim: int, hidden_dim: int) -> None:
         super().__init__()
         self.net = nn.Sequential(
@@ -109,20 +112,20 @@ class FeedForward(nn.Module):#实现了一个简单的前馈神经网络（Feedf
 class Attention(nn.Module):
     def __init__(self, dim: int, heads: int = 8, dim_head: int = 64) -> None:
         super().__init__()
-        inner_dim = dim_head *  heads#注意力头的维度和注意力头
+        inner_dim = dim_head * heads  # 注意力头的维度和注意力头
         project_out = not (heads == 1 and dim_head == dim)
 
         self.heads = heads
         self.scale = dim_head ** -0.5
 
-        self.attend = nn.Softmax(dim = -1)
-        self.to_qkv = nn.Linear(dim, inner_dim * 3, bias = False)
+        self.attend = nn.Softmax(dim=-1)
+        self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
 
         self.to_out = nn.Linear(inner_dim, dim) if project_out else nn.Identity()
 
     def forward(self, x: torch.FloatTensor) -> torch.FloatTensor:
-        qkv = self.to_qkv(x).chunk(3, dim = -1)
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = self.heads), qkv)
+        qkv = self.to_qkv(x).chunk(3, dim=-1)
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
 
         attn = torch.matmul(q, k.transpose(-1, -2)) * self.scale
         attn = self.attend(attn)
@@ -133,42 +136,38 @@ class Attention(nn.Module):
         return self.to_out(out)
 
 
-
-
-class CrossAttention(nn.Module):#交叉注意力
+class CrossAttention(nn.Module):  # 交叉注意力
     def __init__(self, dim: int, heads: int = 8, dim_head: int = 64) -> None:
         super().__init__()
-        inner_dim = dim_head *  heads
+        inner_dim = dim_head * heads
         project_out = not (heads == 1 and dim_head == dim)
 
         self.heads = heads
         self.scale = dim_head ** -0.5
 
-        self.attend = nn.Softmax(dim = -1)
-        self.to_kv = nn.Linear(dim, inner_dim * 2, bias = False)
-        self.to_q = nn.Linear(dim, inner_dim, bias = False)
+        self.attend = nn.Softmax(dim=-1)
+        self.to_kv = nn.Linear(dim, inner_dim * 2, bias=False)
+        self.to_q = nn.Linear(dim, inner_dim, bias=False)
         self.norm = nn.LayerNorm(dim)
 
         self.to_out = nn.Linear(inner_dim, dim) if project_out else nn.Identity()
-        self.multi_head_attention=PreNorm(dim, Attention(dim, heads=heads, dim_head=dim_head))
+        self.multi_head_attention = PreNorm(dim, Attention(dim, heads=heads, dim_head=dim_head))
 
-
-    def forward(self, x: torch.FloatTensor, q_x:torch.FloatTensor) -> torch.FloatTensor:
-        
-        q_in = self.multi_head_attention(q_x)+q_x
+    def forward(self, x: torch.FloatTensor, q_x: torch.FloatTensor) -> torch.FloatTensor:
+        q_in = self.multi_head_attention(q_x) + q_x
         q_in = self.norm(q_in)
 
-        q = rearrange(self.to_q(q_in),'b n (h d) -> b h n d', h = self.heads)       
-        kv = self.to_kv(x).chunk(2, dim = -1)
-        k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = self.heads), kv)
-        
+        q = rearrange(self.to_q(q_in), 'b n (h d) -> b h n d', h=self.heads)
+        kv = self.to_kv(x).chunk(2, dim=-1)
+        k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), kv)
+
         attn = torch.matmul(q, k.transpose(-1, -2)) * self.scale
         attn = self.attend(attn)
 
         out = torch.matmul(attn, v)
         out = rearrange(out, 'b h n d -> b n (h d)')
 
-        return self.to_out(out),q_in
+        return self.to_out(out), q_in
 
 
 class Transformer(nn.Module):
@@ -188,6 +187,7 @@ class Transformer(nn.Module):
 
         return self.norm(x)
 
+
 class CrossTransformer(nn.Module):
     def __init__(self, dim: int, depth: int, heads: int, dim_head: int, mlp_dim: int) -> None:
         super().__init__()
@@ -197,20 +197,22 @@ class CrossTransformer(nn.Module):
                                    PreNorm(dim, FeedForward(dim, mlp_dim))])
             self.layers.append(layer)
         self.norm = nn.LayerNorm(dim)
-        
-    def forward(self, x: torch.FloatTensor, q_x:torch.FloatTensor) -> torch.FloatTensor:
-        encoder_output=x
+
+    def forward(self, x: torch.FloatTensor, q_x: torch.FloatTensor) -> torch.FloatTensor:
+        encoder_output = x
         for attn, ff in self.layers:
-            x,q_in = attn(encoder_output, q_x)
+            x, q_in = attn(encoder_output, q_x)
             x = x + q_in
             x = ff(x) + x
-            q_x=x
+            q_x = x
 
         return self.norm(q_x)
 
+
 class ViTEncoder(nn.Module):
     def __init__(self, image_size: Union[Tuple[int, int], int], patch_size: Union[Tuple[int, int], int],
-                 dim: int, depth: int, heads: int, mlp_dim: int, channels: int = 3, dim_head: int = 64, output_dim=768) -> None:
+                 dim: int, depth: int, heads: int, mlp_dim: int, channels: int = 3, dim_head: int = 64,
+                 output_dim=768) -> None:
         super().__init__()
         image_height, image_width = image_size if isinstance(image_size, tuple) else (image_size, image_size)
         patch_height, patch_width = patch_size if isinstance(patch_size, tuple) else (patch_size, patch_size)
@@ -224,7 +226,8 @@ class ViTEncoder(nn.Module):
             nn.Conv2d(channels, dim, kernel_size=patch_size, stride=patch_size),
             Rearrange('b c h w -> b (h w) c'),
         )
-        self.en_pos_embedding = nn.Parameter(torch.from_numpy(en_pos_embedding).float().unsqueeze(0), requires_grad=False)
+        self.en_pos_embedding = nn.Parameter(torch.from_numpy(en_pos_embedding).float().unsqueeze(0),
+                                             requires_grad=False)
         self.transformer = Transformer(dim, depth, heads, dim_head, mlp_dim)
 
         # 新增卷积层，用于调整输出通道数
@@ -236,21 +239,21 @@ class ViTEncoder(nn.Module):
         x = self.to_patch_embedding(img)  # 将输入图像通过 to_patch_embedding 方法转换为嵌入序列
         x = x + self.en_pos_embedding
         x = self.transformer(x)
-        x = x.permute(0, 2, 1).view(x.shape[0], -1, int(x.shape[1]**0.5), int(x.shape[1]**0.5))  # 转换回 [B, C, H, W] 格式
+        x = x.permute(0, 2, 1).view(x.shape[0], -1, int(x.shape[1] ** 0.5),
+                                    int(x.shape[1] ** 0.5))  # 转换回 [B, C, H, W] 格式
         x = self.output_conv(x)  # 调整通道数
-        
+
         return x
 
 
-
-class ViTDecoder(nn.Module):#ViT 解码器的作用是将经过编码器处理的图像嵌入序列转换回原始图像的尺寸，从而实现图像的重建。
+class ViTDecoder(nn.Module):  # ViT 解码器的作用是将经过编码器处理的图像嵌入序列转换回原始图像的尺寸，从而实现图像的重建。
     def __init__(self, image_size: Union[Tuple[int, int], int], patch_size: Union[Tuple[int, int], int],
                  dim: int, depth: int, heads: int, mlp_dim: int, channels: int = 32, dim_head: int = 64) -> None:
         super().__init__()
         image_height, image_width = image_size if isinstance(image_size, tuple) \
-                                    else (image_size, image_size)
+            else (image_size, image_size)
         patch_height, patch_width = patch_size if isinstance(patch_size, tuple) \
-                                    else (patch_size, patch_size)
+            else (patch_size, patch_size)
 
         assert image_height % patch_height == 0 and image_width % patch_width == 0, 'Image dimensions must be divisible by the patch size.'
         de_pos_embedding = get_2d_sincos_pos_embed(dim, (image_height // patch_height, image_width // patch_width))
@@ -258,21 +261,42 @@ class ViTDecoder(nn.Module):#ViT 解码器的作用是将经过编码器处理�
         self.num_patches = (image_height // patch_height) * (image_width // patch_width)
         self.patch_dim = channels * patch_height * patch_width
 
-        self.transformer = Transformer(dim, depth, heads, dim_head, mlp_dim)#Transformer 层，用于对图像块的嵌入序列进行编码。
-        self.de_pos_embedding = nn.Parameter(torch.from_numpy(de_pos_embedding).float().unsqueeze(0), requires_grad=False)
+        self.transformer = Transformer(dim, depth, heads, dim_head, mlp_dim)  # Transformer 层，用于对图像块的嵌入序列进行编码。
+        self.de_pos_embedding = nn.Parameter(torch.from_numpy(de_pos_embedding).float().unsqueeze(0),
+                                             requires_grad=False)
         self.to_pixel = nn.Sequential(
             Rearrange('b (h w) c -> b c h w', h=image_height // patch_height),
             nn.ConvTranspose2d(dim, channels, kernel_size=4, stride=4)
-        )#编码器处理的图像嵌入序列转换回原始图像的尺寸。
+        )  # 编码器处理的图像嵌入序列转换回原始图像的尺寸。
         self.apply(init_weights)
-    #将加了位置编码的嵌入序列输入到 Transformer 层中进行编码。
-    def forward(self, token: torch.FloatTensor) -> torch.FloatTensor:
-        x = token + self.de_pos_embedding
-        x = self.transformer(x)
-        x = self.to_pixel(x)#重建图像
 
-        return x
-    #返回的是解码器中最后一层转置卷积层的权重参数
+    # 将加了位置编码的嵌入序列输入到 Transformer 层中进行编码。
+    def forward(self, token: torch.FloatTensor) -> torch.FloatTensor:
+        print(f"token.shape:{token.shape}")
+        print(f"self.de_pos_embedding.shape:{self.de_pos_embedding.shape}")
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.de_pos_embedding = self.de_pos_embedding.to(device)
+        token = token.to(device)
+
+        current_dim = self.de_pos_embedding.shape[2]
+        target_dim = 32
+        # 使用线性变换将第三维度从 current_dim 变为 target_dim
+        linear_transform = nn.Linear(current_dim, target_dim)
+
+        print(f"调试self.de_pos_embedding_resize:{self.de_pos_embedding.shape}")
+        self.de_pos_embedding = self.de_pos_embedding.to(device)
+        self.de_pos_embedding = linear_transform(self.de_pos_embedding)
+
+        print(f"self.de_pos_embedding_resize:{self.de_pos_embedding.shape}")
+
+        x = self.transformer(x)
+        x = token + self.de_pos_embedding
+
+        x = self.to_pixel(x)  # 重建图像
+
+        return
+
+    # 返回的是解码器中最后一层转置卷积层的权重参数
     def get_last_layer(self) -> nn.Parameter:
         return self.to_pixel[-1].weight
 
@@ -282,10 +306,9 @@ class CrossAttDecoder(nn.Module):
                  dim: int, depth: int, heads: int, mlp_dim: int, channels: int = 32, dim_head: int = 64) -> None:
         super().__init__()
         image_height, image_width = image_size if isinstance(image_size, tuple) \
-                                    else (image_size, image_size)
+            else (image_size, image_size)
         patch_height, patch_width = patch_size if isinstance(patch_size, tuple) \
-                                    else (patch_size, patch_size)
-
+            else (patch_size, patch_size)
 
         self.to_patch_embedding = nn.Sequential(
             nn.Conv2d(3, dim, kernel_size=patch_size, stride=patch_size),
@@ -299,8 +322,9 @@ class CrossAttDecoder(nn.Module):
         self.patch_dim = channels * patch_height * patch_width
 
         self.transformer = CrossTransformer(dim, depth, heads, dim_head, mlp_dim)
-        
-        self.de_pos_embedding = nn.Parameter(torch.from_numpy(de_pos_embedding).float().unsqueeze(0), requires_grad=False)
+
+        self.de_pos_embedding = nn.Parameter(torch.from_numpy(de_pos_embedding).float().unsqueeze(0),
+                                             requires_grad=False)
         self.to_pixel = nn.Sequential(
             Rearrange('b (h w) c -> b c h w', h=image_height // patch_height),
             nn.ConvTranspose2d(dim, channels, kernel_size=4, stride=4)
@@ -308,12 +332,12 @@ class CrossAttDecoder(nn.Module):
 
         self.apply(init_weights)
 
-    def forward(self, token: torch.FloatTensor, query_img:torch.FloatTensor) -> torch.FloatTensor:
+    def forward(self, token: torch.FloatTensor, query_img: torch.FloatTensor) -> torch.FloatTensor:
         # batch_size=token.shape[0]
         # query=self.query.repeat(batch_size,1,1)+self.de_pos_embedding
-        query=self.to_patch_embedding(query_img)+self.de_pos_embedding
+        query = self.to_patch_embedding(query_img) + self.de_pos_embedding
         x = token + self.de_pos_embedding
-        x = self.transformer(x,query)
+        x = self.transformer(x, query)
         x = self.to_pixel(x)
 
         return x
@@ -337,10 +361,10 @@ class BaseQuantizer(nn.Module):
 
         self.embedding = nn.Embedding(self.n_embed, self.embed_dim)
         self.embedding.weight.data.normal_()
-        
+
     def quantize(self, z: torch.FloatTensor) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.LongTensor]:
         pass
-    
+
     def forward(self, z: torch.FloatTensor) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.LongTensor]:
         if not self.use_residual:
             z_q, loss, encoding_indices = self.quantize(z)
@@ -359,7 +383,7 @@ class BaseQuantizer(nn.Module):
                 encoding_indices.append(indices)
                 losses.append(loss)
 
-            losses, encoding_indices = map(partial(torch.stack, dim = -1), (losses, encoding_indices))
+            losses, encoding_indices = map(partial(torch.stack, dim=-1), (losses, encoding_indices))
             loss = losses.mean()
 
         # preserve gradients with straight-through estimator
@@ -374,100 +398,120 @@ class VectorQuantizer(BaseQuantizer):
                  use_residual: bool = False, num_quantizers: Optional[int] = None, **kwargs) -> None:
         super().__init__(embed_dim, n_embed, True,
                          use_norm, use_residual, num_quantizers)
-        
+
         self.beta = beta
 
     def quantize(self, z: torch.FloatTensor) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.LongTensor]:
         z_reshaped_norm = self.norm(z.view(-1, self.embed_dim))
         embedding_norm = self.norm(self.embedding.weight)
-        
+
         d = torch.sum(z_reshaped_norm ** 2, dim=1, keepdim=True) + \
             torch.sum(embedding_norm ** 2, dim=1) - 2 * \
             torch.einsum('b d, n d -> b n', z_reshaped_norm, embedding_norm)
 
         encoding_indices = torch.argmin(d, dim=1).unsqueeze(1)
         encoding_indices = encoding_indices.view(*z.shape[:-1])
-        
+
         z_q = self.embedding(encoding_indices).view(z.shape)
         z_qnorm, z_norm = self.norm(z_q), self.norm(z)
-        
+
         # compute loss for embedding
-        loss = self.beta * torch.mean((z_qnorm.detach() - z_norm)**2) +  \
-               torch.mean((z_qnorm - z_norm.detach())**2)
+        loss = self.beta * torch.mean((z_qnorm.detach() - z_norm) ** 2) + \
+               torch.mean((z_qnorm - z_norm.detach()) ** 2)
 
         return z_qnorm, loss, encoding_indices
 
 
 class ViTVQ(pl.LightningModule):
-    def __init__(self,image_size=512, patch_size=16,channels=3,face_image_size=512) -> None:
+    def __init__(self, image_size=512, patch_size=16, channels=3, face_image_size=512) -> None:
         super().__init__()
-        
-        self.encoder = ViTEncoder(image_size=image_size, patch_size=patch_size, dim=256,depth=8,heads=8,mlp_dim=2048,channels=channels)
-        self.facerio = FaceRoI(feat_dim=768,upscale=4)
-        self.F_decoder = ViTDecoder(image_size=image_size, patch_size=patch_size, dim=256,depth=3,heads=8,mlp_dim=2048)
-        self.B_decoder= CrossAttDecoder(image_size=image_size, patch_size=patch_size, dim=256,depth=3,heads=8,mlp_dim=2048)
-        self.R_decoder= CrossAttDecoder(image_size=image_size, patch_size=patch_size, dim=256,depth=3,heads=8,mlp_dim=2048)
-        self.L_decoder= CrossAttDecoder(image_size=image_size, patch_size=patch_size, dim=256,depth=3,heads=8,mlp_dim=2048)
+
+        self.encoder = ViTEncoder(image_size=image_size, patch_size=patch_size, dim=256, depth=8, heads=8, mlp_dim=2048,
+                                  channels=channels)
+        self.facerio = FaceRoI(feat_dim=768, upscale=4)
+        self.F_decoder = ViTDecoder(image_size=image_size, patch_size=patch_size, dim=256, depth=3, heads=8,
+                                    mlp_dim=2048)
+        self.B_decoder = CrossAttDecoder(image_size=image_size, patch_size=patch_size, dim=256, depth=3, heads=8,
+                                         mlp_dim=2048)
+        self.R_decoder = CrossAttDecoder(image_size=image_size, patch_size=patch_size, dim=256, depth=3, heads=8,
+                                         mlp_dim=2048)
+        self.L_decoder = CrossAttDecoder(image_size=image_size, patch_size=patch_size, dim=256, depth=3, heads=8,
+                                         mlp_dim=2048)
         # self.quantizer = VectorQuantizer(embed_dim=32,n_embed=8192)
         # self.pre_quant = nn.Linear(512, 32)
         # self.post_quant = nn.Linear(32, 512)
 
+    def forward(self, bbox, x: torch.FloatTensor, smpl_normal) -> torch.FloatTensor:
+        enc_out, img_feat = self.encode(x)
 
-    def forward(self,bbox, x: torch.FloatTensor,smpl_normal) -> torch.FloatTensor:    
-        enc_out,img_feat = self.encode(x)
-        y=self.facerio(img_feat,bbox)
-        enc_out+=y
+        enc_out = torch.tensor(enc_out)
+        print(f"enc_out.shape: {enc_out.shape}")
+        img_feat = torch.tensor(img_feat)
 
-        dec = self.decode(enc_out,smpl_normal)
-        
+        y = self.facerio(img_feat, bbox)
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        img_feat = img_feat.to(device)
+        y = torch.tensor(y).to(device)
+
+        print(f"y.shape: {y.shape}")
+        y_resized = F.interpolate(y, size=(64, 64), mode='bilinear', align_corners=False)
+        # 将 y 的形状调整为与 enc_out 相同的形状 [1, 192, 32, 32]
+        y = F.interpolate(y_resized, size=(32, 32), mode='bilinear', align_corners=False)
+        y = F.interpolate(y, size=enc_out.shape[2:], mode='bilinear', align_corners=False)
+        y_adjusted = torch.zeros(1, 768, 32, 32).to(device)
+
+        # 将原始张量的值复制到调整后的张量中
+        y_adjusted[:, :y.shape[1], :, :] = y
+        y = y_adjusted
+
+        print(f"y.shape_resize: {y.shape}")
+        enc_out = enc_out.to(device)
+
+        dec = self.decode(enc_out, smpl_normal)
+
         return dec
 
     def encode(self, x: torch.FloatTensor) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
         img_feat = self.encoder(x)
-        return img_feat, img_feat  # 返回相同的特征作为两个不同的输出，如果确实需要的话。
+        enc_out = self.encoder(x)
+        return enc_out, img_feat  # 返回相同的特征作为两个不同的输出，如果确实需要的话。
 
-
-    def facerio1(self,img_feat, face_bbox):
-        face_feat=self.facerio(img_feat,face_bbox)
-        return face_feat
-
-        
-
-
-    def decode(self, enc_out: torch.FloatTensor,smpl_normal) -> torch.FloatTensor:
-        back_query=smpl_normal['T_normal_B']
-        right_query=smpl_normal['T_normal_R']
-        left_query=smpl_normal['T_normal_L']
+    def decode(self, enc_out: torch.FloatTensor, smpl_normal) -> torch.FloatTensor:
+        back_query = smpl_normal['T_normal_B']
+        right_query = smpl_normal['T_normal_R']
+        left_query = smpl_normal['T_normal_L']
         # quant = self.post_quant(quant)
         dec_F = self.F_decoder(enc_out)
-        dec_B = self.B_decoder(enc_out,back_query)
-        dec_R = self.R_decoder(enc_out,right_query)
-        dec_L = self.L_decoder(enc_out,left_query)
-        
-        return (dec_F,dec_B,dec_R,dec_L)
+        dec_B = self.B_decoder(enc_out, back_query)
+        dec_R = self.R_decoder(enc_out, right_query)
+        dec_L = self.L_decoder(enc_out, left_query)
+
+        return (dec_F, dec_B, dec_R, dec_L)
 
     # def encode_codes(self, x: torch.FloatTensor) -> torch.LongTensor:
     #     h = self.encoder(x)
     #     h = self.pre_quant(h)
     #     _, _, codes = self.quantizer(h)
-        
+
     #     return codes
 
     # def decode_codes(self, code: torch.LongTensor) -> torch.FloatTensor:
     #     quant = self.quantizer.embedding(code)
     #     quant = self.quantizer.norm(quant)
-        
+
     #     if self.quantizer.use_residual:
-    #         quant = quant.sum(-2)  
-            
+    #         quant = quant.sum(-2)
+
     #     dec = self.decode(quant)
-        
+
     #     return dec
 
 
 from kornia.geometry.transform import get_affine_matrix2d, warp_affine
 import os
-os.environ["OPENCV_IO_ENABLE_OPENEXR"]="1"
+
+os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 import cv2
 import mediapipe as mp
 import torch
@@ -485,7 +529,8 @@ from torchvision import transforms
 from common.nets.layer import make_conv_layers, make_linear_layers, make_deconv_layers
 from common.utils.transforms import sample_joint_features, soft_argmax_2d, soft_argmax_3d
 
-#可以裁剪出脸部边框
+
+# 可以裁剪出脸部边框
 def transform_to_tensor(res, mean=None, std=None, is_tensor=False):
     all_ops = []
     if res is not None:
@@ -509,30 +554,28 @@ def get_affine_matrix_wh(w1, h1, w2, h2):
 
 
 def get_affine_matrix_box(boxes, w2, h2):
-
     # boxes [left, top, right, bottom]
-    width = boxes[:, 2] - boxes[:, 0]    #(N,)
-    height = boxes[:, 3] - boxes[:, 1]    #(N,)
+    width = boxes[:, 2] - boxes[:, 0]  # (N,)
+    height = boxes[:, 3] - boxes[:, 1]  # (N,)
     center = torch.tensor(
         [(boxes[:, 0] + boxes[:, 2]) / 2.0, (boxes[:, 1] + boxes[:, 3]) / 2.0]
-    ).T    #(N,2)
+    ).T  # (N,2)
     scale = torch.min(torch.tensor([w2 / width, h2 / height]),
-                      dim=0)[0].unsqueeze(1).repeat(1, 2) * 0.9    #(N,2)
-    transl = torch.cat([w2 / 2.0 - center[:, 0:1], h2 / 2.0 - center[:, 1:2]], dim=1)   #(N,2)
-    M = get_affine_matrix2d(transl, center, scale, angle=torch.tensor([0.,]*transl.shape[0]))
+                      dim=0)[0].unsqueeze(1).repeat(1, 2) * 0.9  # (N,2)
+    transl = torch.cat([w2 / 2.0 - center[:, 0:1], h2 / 2.0 - center[:, 1:2]], dim=1)  # (N,2)
+    M = get_affine_matrix2d(transl, center, scale, angle=torch.tensor([0., ] * transl.shape[0]))
 
     return M
 
 
 def load_img(img_file):
-
     if img_file.endswith("exr"):
         img = cv2.imread(img_file, cv2.IMREAD_ANYCOLOR | cv2.IMREAD_ANYDEPTH)
-    else :
+    else:
         img = cv2.imread(img_file, cv2.IMREAD_UNCHANGED)
 
     # considering non 8-bit image
-    if img.dtype != np.uint8 :
+    if img.dtype != np.uint8:
         img = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
 
     if len(img.shape) == 2:
@@ -545,7 +588,8 @@ def load_img(img_file):
 
     return torch.tensor(img).permute(2, 0, 1).unsqueeze(0).float(), img.shape[:2]
 
-#从图像中提取关键点（keypoints），包括人体姿势、左手、右手和面部关键点。
+
+# 从图像中提取关键点（keypoints），包括人体姿势、左手、右手和面部关键点。
 def get_keypoints(image):
     def collect_xyv(x, body=True):
         lmk = x.landmark
@@ -558,8 +602,8 @@ def get_keypoints(image):
     mp_holistic = mp.solutions.holistic
 
     with mp_holistic.Holistic(
-        static_image_mode=True,
-        model_complexity=2,
+            static_image_mode=True,
+            model_complexity=2,
     ) as holistic:
         results = holistic.process(image)
 
@@ -579,9 +623,9 @@ def get_keypoints(image):
 
     return result
 
-#根据检测到的关键点（landmarks）对图像进行裁剪和变换，以准备用于后续的分割任务
-def get_pymafx(image, landmarks):
 
+# 根据检测到的关键点（landmarks）对图像进行裁剪和变换，以准备用于后续的分割任务
+def get_pymafx(image, landmarks):
     # image [3,512,512]
 
     item = {
@@ -630,7 +674,6 @@ def get_pymafx(image, landmarks):
 
 
 def remove_floats(mask):
-
     # 1. find all the contours
     # 2. fillPoly "True" for the largest one
     # 3. fillPoly "False" for its childrens
@@ -647,19 +690,18 @@ def remove_floats(mask):
     return new_mask
 
 
-def econ_process_image(img_file, hps_type, single, input_res,image, detector):
-
+def econ_process_image(img_file, hps_type, single, input_res, image, detector):
     img_raw, (in_height, in_width) = load_img(img_file)
     tgt_res = input_res * 2
     M_square = get_affine_matrix_wh(in_width, in_height, tgt_res, tgt_res)
     img_square = warp_affine(
         img_raw,
-        M_square[:, :2], (tgt_res, ) * 2,
+        M_square[:, :2], (tgt_res,) * 2,
         mode='bilinear',
         padding_mode='zeros',
         align_corners=True
     )
-    #使用的decoder对人体进行检测，得到人体的边框和掩码，
+    # 使用的decoder对人体进行检测，得到人体的边框和掩码，
     # detection for bbox
     predictions = detector(img_square / 255.)[0]
 
@@ -672,7 +714,7 @@ def econ_process_image(img_file, hps_type, single, input_res,image, detector):
 
     boxes = predictions["boxes"][human_ids, :].detach().cpu().numpy()
     masks = predictions["masks"][human_ids, :, :].permute(0, 2, 3, 1).detach().cpu().numpy()
-        #根据边框值计算仿射变换矩阵，并用该矩阵对原始图像进行裁剪，得到人体部分的图像
+    # 根据边框值计算仿射变换矩阵，并用该矩阵对原始图像进行裁剪，得到人体部分的图像
     M_crop = get_affine_matrix_box(boxes, input_res, input_res)
 
     img_icon_lst = []
@@ -693,7 +735,6 @@ def econ_process_image(img_file, hps_type, single, input_res,image, detector):
 
     for idx in range(len(boxes)):
 
-
         # mask out the pixels of others
         if len(masks) > 1:
             mask_detection = (masks[np.arange(len(masks)) != idx]).max(axis=0)
@@ -708,14 +749,14 @@ def econ_process_image(img_file, hps_type, single, input_res,image, detector):
 
         img_crop = warp_affine(
             img_square_rgba.unsqueeze(0).permute(0, 3, 1, 2),
-            M_crop[idx:idx + 1, :2], (input_res, ) * 2,
+            M_crop[idx:idx + 1, :2], (input_res,) * 2,
             mode='bilinear',
             padding_mode='zeros',
             align_corners=True
         ).squeeze(0).permute(1, 2, 0).numpy().astype(np.uint8)
-        #将背景移除，得到准确的mask
+        # 将背景移除，得到准确的mask
         # get accurate person segmentation mask
-        img_rembg = remove(img_crop) #post_process_mask=True)
+        img_rembg = remove(img_crop)  # post_process_mask=True)
         img_mask = remove_floats(img_rembg[:, :, [3]])
 
         mean_icon = std_icon = (0.5, 0.5, 0.5)
@@ -736,7 +777,7 @@ def econ_process_image(img_file, hps_type, single, input_res,image, detector):
             hands_visibility[1] = False
         hands_visibility_lst.append(hands_visibility)
 
-        if hps_type == 'pymafx':#hps_type是处理关键点的类型
+        if hps_type == 'pymafx':  # hps_type是处理关键点的类型
             img_pymafx_lst.append(
                 get_pymafx(
                     transform_to_tensor(512, constants.IMG_NORM_MEAN,
@@ -758,54 +799,62 @@ def econ_process_image(img_file, hps_type, single, input_res,image, detector):
         y_max = face_landmarks[:, 1].max()
         face_bbox = [x_min, y_min, x_max, y_max]
 
-
         face_img = image[:, :, face_bbox[1]:face_bbox[3], face_bbox[0]:face_bbox[2]]
-        resized_img = cv2.resize(face_img, (512,512), interpolation=cv2.INTER_LINEAR)
+        resized_img = cv2.resize(face_img, (512, 512), interpolation=cv2.INTER_LINEAR)
         height, width, _ = face_img.shape
         face_img_size = (width, height)
 
+    return face_img, face_img_size
 
 
-
-    return face_img,face_img_size
 from mmcv.ops.roi_align import roi_align
+
+
 class FaceRoI(nn.Module):
     def __init__(self, feat_dim=768, upscale=4):
         super(FaceRoI, self).__init__()
         self.deconv = nn.ModuleList([])
-        for i in range(int(math.log2(upscale))+1):
-            if i==0:
-                self.deconv.append(make_conv_layers([feat_dim, feat_dim], kernel=1, stride=1, padding=0, bnrelu_final=False))
-            elif i==1:
-                self.deconv.append(make_deconv_layers([feat_dim, feat_dim//2]))
-            elif i==2:
-                self.deconv.append(make_deconv_layers([feat_dim, feat_dim//2, feat_dim//4]))
-            elif i==3:
-                self.deconv.append(make_deconv_layers([feat_dim, feat_dim//2, feat_dim//4, feat_dim//8]))
+        for i in range(int(math.log2(upscale)) + 1):
+            if i == 0:
+                self.deconv.append(
+                    make_conv_layers([feat_dim, feat_dim], kernel=1, stride=1, padding=0, bnrelu_final=False))
+            elif i == 1:
+                self.deconv.append(make_deconv_layers([feat_dim, feat_dim // 2]))
+            elif i == 2:
+                self.deconv.append(make_deconv_layers([feat_dim, feat_dim // 2, feat_dim // 4]))
+            elif i == 3:
+                self.deconv.append(make_deconv_layers([feat_dim, feat_dim // 2, feat_dim // 4, feat_dim // 8]))
 
     def forward(self, img_feat, face_bbox):
         face_bbox = torch.cat((torch.arange(face_bbox.shape[0]).float().cuda()[:, None], face_bbox),
-                               1)  # batch_idx, xmin, ymin, xmax, ymax
+                              1)  # batch_idx, xmin, ymin, xmax, ymax
         face_img_feats = []
         for i, deconv in enumerate(self.deconv):
-            scale = 2**i
+            scale = 2 ** i
             img_feat_i = deconv(img_feat)
+            print(f"img_feat_i.shape: {img_feat_i.shape}")
             face_bbox_roi = face_bbox.clone()
             face_bbox_roi[:, 1] = face_bbox_roi[:, 1] / cfg.input_body_shape[1] * cfg.output_hm_shape[2] * scale
             face_bbox_roi[:, 2] = face_bbox_roi[:, 2] / cfg.input_body_shape[0] * cfg.output_hm_shape[1] * scale
             face_bbox_roi[:, 3] = face_bbox_roi[:, 3] / cfg.input_body_shape[1] * cfg.output_hm_shape[2] * scale
             face_bbox_roi[:, 4] = face_bbox_roi[:, 4] / cfg.input_body_shape[0] * cfg.output_hm_shape[1] * scale
-            assert (cfg.output_hm_shape[1]*scale, cfg.output_hm_shape[2]*scale) == (img_feat_i.shape[2], img_feat_i.shape[3])
+            # 调试
+            print(f"img_feat_i.shape[2]: {img_feat_i.shape[2]}")
+            print(f"img_feat_i.shape[3]: {img_feat_i.shape[3]}")
+            print(f"cfg.output_hm_shape[1]*scale:{cfg.output_hm_shape[1] * scale}")
+            print(f"cfg.output_hm_shape[2]*scale:{cfg.output_hm_shape[2] * scale}")
+
+            # assert (cfg.output_hm_shape[1]*scale, cfg.output_hm_shape[2]*scale) == (img_feat_i.shape[2], img_feat_i.shape[3])
             face_img_feat = roi_align(img_feat_i, face_bbox_roi,
-                                                       (cfg.output_face_hm_shape[1]*scale//2,
-                                                        cfg.output_face_hm_shape[2]*scale//2),
-                                                       1.0, 0, 'avg', False)
+                                      (cfg.output_face_hm_shape[1] * scale // 2,
+                                       cfg.output_face_hm_shape[2] * scale // 2),
+                                      1.0, 0, 'avg', False)
             face_img_feats.append(face_img_feat)
-        return face_img_feats[::-1]   # high resolution -> low resolution
+
+        return face_img_feats[-1]  # high resolution -> low resolution
 
 
 def blend_rgb_norm(norms, data):
-
     # norms [N, 3, res, res]
     masks = (norms.sum(dim=1) != norms[0, :, 0, 0].sum()).float().unsqueeze(1)
     norm_mask = F.interpolate(
@@ -817,7 +866,6 @@ def blend_rgb_norm(norms, data):
     final = data["img_raw"].type_as(norm_mask)
 
     for idx in range(len(norms)):
-
         norm_pred = (norm_mask[idx:idx + 1, :3, :, :] + 1.0) * 255.0 / 2.0
         mask_pred = norm_mask[idx:idx + 1, 3:4, :, :].repeat(1, 3, 1, 1)
 
@@ -828,9 +876,9 @@ def blend_rgb_norm(norms, data):
 
     return final.detach().cpu()
 
-#将经过裁剪的图像恢复到原始尺寸
-def unwrap(image, uncrop_param, idx):
 
+# 将经过裁剪的图像恢复到原始尺寸
+def unwrap(image, uncrop_param, idx):
     device = image.device
 
     img_square = warp_affine(
