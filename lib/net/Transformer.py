@@ -246,14 +246,12 @@ class ViTEncoder(nn.Module):
         return x
 
 
-class ViTDecoder(nn.Module):  # ViT 解码器的作用是将经过编码器处理的图像嵌入序列转换回原始图像的尺寸，从而实现图像的重建。
+class ViTDecoder(nn.Module):
     def __init__(self, image_size: Union[Tuple[int, int], int], patch_size: Union[Tuple[int, int], int],
                  dim: int, depth: int, heads: int, mlp_dim: int, channels: int = 32, dim_head: int = 64) -> None:
         super().__init__()
-        image_height, image_width = image_size if isinstance(image_size, tuple) \
-            else (image_size, image_size)
-        patch_height, patch_width = patch_size if isinstance(patch_size, tuple) \
-            else (patch_size, patch_size)
+        image_height, image_width = image_size if isinstance(image_size, tuple) else (image_size, image_size)
+        patch_height, patch_width = patch_size if isinstance(patch_size, tuple) else (patch_size, patch_size)
 
         assert image_height % patch_height == 0 and image_width % patch_width == 0, 'Image dimensions must be divisible by the patch size.'
         de_pos_embedding = get_2d_sincos_pos_embed(dim, (image_height // patch_height, image_width // patch_width))
@@ -261,44 +259,46 @@ class ViTDecoder(nn.Module):  # ViT 解码器的作用是将经过编码器处�
         self.num_patches = (image_height // patch_height) * (image_width // patch_width)
         self.patch_dim = channels * patch_height * patch_width
 
-        self.transformer = Transformer(dim, depth, heads, dim_head, mlp_dim)  # Transformer 层，用于对图像块的嵌入序列进行编码。
-        self.de_pos_embedding = nn.Parameter(torch.from_numpy(de_pos_embedding).float().unsqueeze(0),
-                                             requires_grad=False)
+        self.transformer = Transformer(dim, depth, heads, dim_head, mlp_dim)
+        self.de_pos_embedding = nn.Parameter(torch.from_numpy(de_pos_embedding).float().unsqueeze(0), requires_grad=False)
         self.to_pixel = nn.Sequential(
             Rearrange('b (h w) c -> b c h w', h=image_height // patch_height),
             nn.ConvTranspose2d(dim, channels, kernel_size=4, stride=4)
-        )  # 编码器处理的图像嵌入序列转换回原始图像的尺寸。
+        )
         self.apply(init_weights)
 
-    # 将加了位置编码的嵌入序列输入到 Transformer 层中进行编码。
+        # 添加一个线性层来将 de_pos_embedding 的通道数从 1024 调整到 768
+        self.channel_reduction = nn.Linear(1024, 768)
+
     def forward(self, token: torch.FloatTensor) -> torch.FloatTensor:
-        print(f"token.shape:{token.shape}")
-        print(f"self.de_pos_embedding.shape:{self.de_pos_embedding.shape}")
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.de_pos_embedding = self.de_pos_embedding.to(device)
-        token = token.to(device)
+        token = token.to(self.de_pos_embedding.device)  # 确保 token 在正确的设备上
 
-        current_dim = self.de_pos_embedding.shape[2]
-        target_dim = 32
-        # 使用线性变换将第三维度从 current_dim 变为 target_dim
-        linear_transform = nn.Linear(current_dim, target_dim)
+        # 使用线性层调整 de_pos_embedding 的通道数
+        de_pos_embedding_adjusted = self.channel_reduction(self.de_pos_embedding.squeeze(1))
 
-        print(f"调试self.de_pos_embedding_resize:{self.de_pos_embedding.shape}")
-        self.de_pos_embedding = self.de_pos_embedding.to(device)
-        self.de_pos_embedding = linear_transform(self.de_pos_embedding)
+        # 调整位置编码的空间维度以匹配 token 的空间维度
+        de_pos_embedding_resized = F.interpolate(
+            de_pos_embedding_adjusted.unsqueeze(-1),  # 添加一个空间维度
+            size=token.shape[2:],  # 设置目标空间维度以匹配 token
+            mode='bilinear',  # 设置插值方法
+            align_corners=True  # 设置 align_corners
+        )
 
-        print(f"self.de_pos_embedding_resize:{self.de_pos_embedding.shape}")
+        # 将调整后的位置编码与 token 相加
+        x = token + de_pos_embedding_resized
 
+        # 通过 Transformer 和到像素的转换
         x = self.transformer(x)
-        x = token + self.de_pos_embedding
-
         x = self.to_pixel(x)  # 重建图像
 
-        return
+        return x
 
-    # 返回的是解码器中最后一层转置卷积层的权重参数
     def get_last_layer(self) -> nn.Parameter:
         return self.to_pixel[-1].weight
+
+
+
+
 
 
 class CrossAttDecoder(nn.Module):
@@ -898,10 +898,4 @@ def unwrap(image, uncrop_param, idx):
         padding_mode='zeros',
         align_corners=True
     )
-    from main.config import cfg
-    import math
-    from mmcv.ops.roi_align import roi_align
     return img_ori
-
-
-
