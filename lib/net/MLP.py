@@ -8,7 +8,6 @@ from torch.autograd import grad
 # from fightingcv_attention.attention.SelfAttention import ScaledDotProductAttention
 import numpy as np
 
-
 class SDF2Density(pl.LightningModule):
     def __init__(self):
         super(SDF2Density, self).__init__()
@@ -19,8 +18,7 @@ class SDF2Density(pl.LightningModule):
     def forward(self, sdf):
         # use Laplace CDF to compute the probability
         # temporally use sigmoid to represent laplace CDF
-        return 1.0 / (self.beta + 1e-6) * F.sigmoid(-sdf / (self.beta + 1e-6))
-
+        return 1.0/(self.beta+1e-6)*F.sigmoid(-sdf/(self.beta+1e-6))
 
 class SDF2Occ(pl.LightningModule):
     def __init__(self):
@@ -32,11 +30,11 @@ class SDF2Occ(pl.LightningModule):
     def forward(self, sdf):
         # use Laplace CDF to compute the probability
         # temporally use sigmoid to represent laplace CDF
-        return F.sigmoid(-sdf / (self.beta + 1e-6))
+        return F.sigmoid(-sdf/(self.beta+1e-6))
 
 
 class DeformationMLP(pl.LightningModule):
-    def __init__(self, input_dim=64, output_dim=3, activation='LeakyReLU', name=None, opt=None):
+    def __init__(self,input_dim=64,output_dim=3,activation='LeakyReLU',name=None,opt=None):
         super(DeformationMLP, self).__init__()
         self.name = name
         self.activation = activation
@@ -46,17 +44,17 @@ class DeformationMLP(pl.LightningModule):
         #     nn.LeakyReLU(inplace=True),
         #     nn.Conv1d(64, output_dim, 1),
         #     )
-        channels = [input_dim + 8 + 1 + 3, 128, 64, output_dim]
-        self.deform_mlp = MLP(filter_channels=channels,
-                              name="if",
-                              res_layers=opt.res_layers,
-                              norm=opt.norm_mlp,
-                              last_op=None)  # occupancy
+        channels=[input_dim+8+1+3,128, 64, output_dim]
+        self.deform_mlp=MLP(filter_channels=channels,
+                         name="if",
+                         res_layers=opt.res_layers,
+                         norm=opt.norm_mlp,
+                         last_op=None)  # occupancy
         smplx_dim = 10475
-        k = 8
-        self.per_pt_code = nn.Embedding(smplx_dim, k)
+        k=8
+        self.per_pt_code = nn.Embedding(smplx_dim,k)
 
-    def forward(self, feature, smpl_vis, pts_id, xyz):
+    def forward(self, feature,smpl_vis,pts_id, xyz):
         '''
         feature may include multiple view inputs
         args:
@@ -65,12 +63,10 @@ class DeformationMLP(pl.LightningModule):
             [B, C_out, N] prediction
         '''
         y = feature
-        e_code = self.per_pt_code(pts_id).permute(0, 2,
-                                                  1)  # a code that distinguishes each point on different parts of the body
-        y = torch.cat([y, xyz, smpl_vis, e_code], 1)
+        e_code=self.per_pt_code(pts_id).permute(0,2,1)    # a code that distinguishes each point on different parts of the body
+        y=torch.cat([y,xyz,smpl_vis,e_code],1)
         y = self.deform_mlp(y)
         return y
-
 
 class MLP(pl.LightningModule):
 
@@ -79,7 +75,8 @@ class MLP(pl.LightningModule):
                  name=None,
                  res_layers=[],
                  norm='group',
-                 last_op=None):
+                 last_op=None,
+                 mode=None):
 
         super(MLP, self).__init__()
 
@@ -88,8 +85,12 @@ class MLP(pl.LightningModule):
         self.res_layers = res_layers
         self.norm = norm
         self.last_op = last_op
+        self.mode = mode
+
         self.name = name
         self.activate = nn.LeakyReLU(inplace=True)
+        #d_if
+        # filter_channels = [13, 512, 256, 128, 2]
 
         for l in range(0, len(filter_channels) - 1):
             if l in self.res_layers:
@@ -113,7 +114,20 @@ class MLP(pl.LightningModule):
                                                            name='weight')
                     # print(self.filters[l].weight_g.size(),
                     #       self.filters[l].weight_v.size())
-
+        # dif lyz add 
+        self.filters_fine = nn.ModuleList()
+        self.norms_fine = nn.ModuleList()
+        filter_channels_fine = [16, 512, 256, 128, 1]
+        for l in range(0, len(filter_channels_fine) - 1):
+            if l in self.res_layers:
+                self.filters_fine.append(
+                    nn.Conv1d(filter_channels_fine[l] + filter_channels_fine[0],
+                              filter_channels_fine[l + 1], 1))
+            else:
+                self.filters_fine.append(
+                    nn.Conv1d(filter_channels_fine[l], filter_channels_fine[l + 1], 1))
+            if l != len(filter_channels_fine) - 2:
+                self.norms_fine.append(nn.BatchNorm1d(filter_channels_fine[l + 1]))
     def forward(self, feature):
         '''
         feature may include multiple view inputs
@@ -134,10 +148,40 @@ class MLP(pl.LightningModule):
                 else:
                     y = self.activate(self.norms[i](y))
 
-        if self.last_op is not None:
-            y = self.last_op(y)
+        mu_0, sigma_0 = torch.split(y, 1, dim=1) # (B, C=1, N), (B, C=1, N)
+        sigma_0 = F.softplus(sigma_0)
+        sigma_0 += 1e-8
+        q_distribution = torch.distributions.Normal(mu_0, sigma_0)
+        z = q_distribution.rsample()
 
-        return y
+        if self.mode != 'test':
+            feat_fine = torch.cat([tmpy, z, mu_0, sigma_0], 1)  # (B, C=13+2+1, N)
+        else:
+            feat_fine = torch.cat([tmpy, mu_0, mu_0, sigma_0], 1)
+        fine_y = feat_fine
+        tmp_fine_y = feat_fine
+
+        for i, f in enumerate(self.filters_fine):
+            fine_y = f(fine_y if i not in self.res_layers else torch.cat([fine_y, tmp_fine_y], 1))
+            if i != len(self.filters_fine) - 1:
+                if self.norm not in ['batch', 'group', 'instance']:
+                    fine_y = self.activate(fine_y)
+                else:
+                    fine_y = self.activate(self.norms_fine[i](fine_y)) # (B, C=1, N)
+        #zechuan
+        # if self.last_op is not None:
+        #     y = self.last_op(y)
+
+        # return y
+        
+        if self.last_op is not None:
+            fine_y = self.last_op(fine_y) # (B, C=1, N)
+        else:
+            fine_y = fine_y
+        if self.mode != 'test':
+            return fine_y, mu_0, sigma_0
+        else:
+            return fine_y
 
 
 # Positional encoding (section 5.1)
@@ -145,31 +189,31 @@ class Embedder(pl.LightningModule):
     def __init__(self, **kwargs):
         self.kwargs = kwargs
         self.create_embedding_fn()
-
+        
     def create_embedding_fn(self):
         embed_fns = []
         d = self.kwargs['input_dims']
         out_dim = 0
         if self.kwargs['include_input']:
-            embed_fns.append(lambda x: x)
+            embed_fns.append(lambda x : x)
             out_dim += d
-
+            
         max_freq = self.kwargs['max_freq_log2']
         N_freqs = self.kwargs['num_freqs']
-
+        
         if self.kwargs['log_sampling']:
-            freq_bands = 2. ** torch.linspace(0., max_freq, steps=N_freqs)
+            freq_bands = 2.**torch.linspace(0., max_freq, steps=N_freqs)
         else:
-            freq_bands = torch.linspace(2. ** 0., 2. ** max_freq, steps=N_freqs)
-
+            freq_bands = torch.linspace(2.**0., 2.**max_freq, steps=N_freqs)
+            
         for freq in freq_bands:
             for p_fn in self.kwargs['periodic_fns']:
-                embed_fns.append(lambda x, p_fn=p_fn, freq=freq: p_fn(x * freq))
+                embed_fns.append(lambda x, p_fn=p_fn, freq=freq : p_fn(x * freq))
                 out_dim += d
-
+                    
         self.embed_fns = embed_fns
         self.out_dim = out_dim
-
+        
     def embed(self, inputs):
         return torch.cat([fn(inputs) for fn in self.embed_fns], -1)
 
@@ -177,18 +221,18 @@ class Embedder(pl.LightningModule):
 def get_embedder(multires=6, i=0):
     if i == -1:
         return nn.Identity(), 3
-
+    
     embed_kwargs = {
-        'include_input': True,
-        'input_dims': 3,
-        'max_freq_log2': multires - 1,
-        'num_freqs': multires,
-        'log_sampling': True,
-        'periodic_fns': [torch.sin, torch.cos],
+                'include_input' : True,
+                'input_dims' : 3,
+                'max_freq_log2' : multires-1,
+                'num_freqs' : multires,
+                'log_sampling' : True,
+                'periodic_fns' : [torch.sin, torch.cos],
     }
-
+    
     embedder_obj = Embedder(**embed_kwargs)
-    embed = lambda x, eo=embedder_obj: eo.embed(x)
+    embed = lambda x, eo=embedder_obj : eo.embed(x)
     return embed, embedder_obj.out_dim
 
 
@@ -200,30 +244,32 @@ class TransformerEncoderLayer(pl.LightningModule):
         super(TransformerEncoderLayer, self).__init__()
 
         embed_fn, input_ch = get_embedder(multires=multires)
-        self.skips = skips
+        self.skips=skips
         self.dropout = dropout
-        D = num_mlp_layers
+        D=num_mlp_layers
         self.positional_encoding = embed_fn
         self.d_model = d_model
-        triplane_dim = 64
-        opt.mlp_dim[0] = triplane_dim + 6 + 8
-        opt.mlp_dim_color[0] = triplane_dim + 6 + 8
+        triplane_dim=64
+        opt.mlp_dim[0]=triplane_dim+6+8
+        opt.mlp_dim_color[0]=triplane_dim+6+8
 
-        self.geo_mlp = MLP(filter_channels=opt.mlp_dim,
-                           name="if",
+        self.geo_mlp=MLP(filter_channels=opt.mlp_dim,
+                         name="if",
+                         res_layers=opt.res_layers,
+                         norm=opt.norm_mlp,
+                         last_op=nn.Sigmoid())  # occupancy
+        
+        self.color_mlp=MLP(filter_channels=opt.mlp_dim_color,
+                           name="color_if",
                            res_layers=opt.res_layers,
                            norm=opt.norm_mlp,
-                           last_op=nn.Sigmoid())  # occupancy
-
-        self.color_mlp = MLP(filter_channels=opt.mlp_dim_color,
-                             name="color_if",
-                             res_layers=opt.res_layers,
-                             norm=opt.norm_mlp,
-                             last_op=nn.Tanh())  # color
+                           last_op=nn.Tanh())  # color
 
         self.softmax = nn.Softmax(dim=-1)
 
-    def forward(self, query_points, key_points, point_features, smpl_feat, training=True, type='shape'):
+
+
+    def forward(self,query_points,key_points,point_features,smpl_feat,training=True,type='shape'):
         # Q=self.positional_encoding(query_points)  #[B,N,39]
         # K=self.positional_encoding(key_points)   #[B,N',39]
         # V=point_features.permute(0,2,1)                                     #[B,N',192]
@@ -236,42 +282,51 @@ class TransformerEncoderLayer(pl.LightningModule):
         # # master feature
         # attn_output = torch.bmm(attn_output_weights, V)  #[B,N,192]
 
-        attn_output = point_features  # [B,N,192] bary centric interpolation
+        attn_output=point_features                       # [B,N,192] bary centric interpolation 
 
-        feature = torch.cat([attn_output, smpl_feat], dim=1)
-
-        if type == 'shape':
-            h = feature
-
-            h = self.geo_mlp(h)  # [B,1,N]
+        feature=torch.cat([attn_output,smpl_feat],dim=1)               
+       
+        if type=='shape':
+            h=feature          
+           
+            h=self.geo_mlp(h)   # [B,1,N]
             return h
+        
+        
+        elif type=='color':
+            #f=self.head(feature)               #[B,N,512]
 
-
-        elif type == 'color':
-            # f=self.head(feature)               #[B,N,512]
-
-            h = feature
-
-            h = self.color_mlp(h)  # [B,3,N]
+            h=feature
+           
+            h=self.color_mlp(h)   # [B,3,N]
             return h
-        elif type == 'shape_color':
-            h_s = feature
-            h_c = feature
+        elif type=='shape_color':
+            h_s=feature
+            h_c=feature
+           
+            h_s=self.geo_mlp(h_s)   # [B,1,N]
+           
+            h_c=self.color_mlp(h_c)   # [B,3,N]
+            
+            return h_s,h_c
+            
 
-            h_s = self.geo_mlp(h_s)  # [B,1,N]
-
-            h_c = self.color_mlp(h_c)  # [B,3,N]
-
-            return h_s, h_c
 
 
 class Swish(pl.LightningModule):
     def __init__(self):
         super(Swish, self).__init__()
-
+ 
     def forward(self, x):
         x = x * F.sigmoid(x)
         return x
+    
+
+
+
+
+
+
 
 
 # # Import pytorch modules
@@ -321,3 +376,5 @@ class PositionalEncoding(nn.Module):
 # y = torch.randn(batch_size, num_queries, 3)
 
 # # Map both d
+
+

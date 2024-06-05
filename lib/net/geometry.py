@@ -42,7 +42,9 @@ def index(feat, uv):
     #samples = grid_sample(feat, uv)  # [B, C, N, 1]
     return samples.view(B, C, N)  # [B, C, N]
 
-
+# 双线性插值（bilinear interpolation）
+# 根据给定的“光学流”（optical flow）或坐标偏移（由optical参数表示）
+# 来重新采样一个图像（由image参数表示）
 def grid_sample(image, optical):
     N, C, IH, IW = image.shape
     _, H, W, _ = optical.shape

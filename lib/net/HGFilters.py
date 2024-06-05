@@ -20,7 +20,10 @@ import torch.nn.functional as F
 
 
 class HourGlass(nn.Module):
-
+    # lyz
+    # 沙漏（HourGlass）模块，这是一种特殊的卷积神经网络结构，
+    # 主要用于人体姿态估计等任务。它包含多个下采样和上采样步骤，
+    # 形成一个对称的结构，形状类似沙漏
     def __init__(self, num_modules, depth, num_features, opt):
         super(HourGlass, self).__init__()
         self.num_modules = num_modules
@@ -31,6 +34,10 @@ class HourGlass(nn.Module):
         self._generate_network(self.depth)
 
     def _generate_network(self, level):
+        # lyz
+        # 递归地创建网络层。对于每个级别，它添加两个卷积块（ConvBlock，未在代码中定义）b1_ 和 b2_。
+        # 如果当前级别大于1，它会递归地调用自身以创建下一级别的网络；
+        # 否则，它会添加一个额外的卷积块 b2_plus_。最后，它添加一个卷积块 b3_
         self.add_module('b1_' + str(level),
                         ConvBlock(self.features, self.features, self.opt))
 
@@ -201,8 +208,11 @@ class HGFilter(nn.Module):
 
 
 
-
-
+# lyz
+# 基于 hourglass 网络的深度学习模型，用于预测人体关键点
+# 输入通道数in_dim、卷积核大小k、步长s、填充p
+# 使用nn.BatchNorm2d或nn.GroupNorm对其进行归一化
+# 定义了三个卷积层conv2、conv3和conv4，以及一个反卷积层up_conv
 class FuseHGFilter(nn.Module):
 
     def __init__(self, opt, num_modules, in_dim):
