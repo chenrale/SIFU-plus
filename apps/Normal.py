@@ -15,6 +15,9 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
+# SIFU sideview 
+# turns NormalNet into Hallucinator
+# turns normal_F & normal_B into render_B & render_L
 
 class Normal(pl.LightningModule):
 

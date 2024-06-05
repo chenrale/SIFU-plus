@@ -27,12 +27,11 @@ from torch import nn
 from skimage.transform import resize
 import pytorch_lightning as pl
 import time
-from lib.net.Transformer import ViTEncoder
 torch.backends.cudnn.benchmark = True
 import math
 
 class ICON(pl.LightningModule):
-    encoder=ViTEncoder(image_size=512, patch_size=16, dim=256,depth=8,heads=8,mlp_dim=2048,channels=3)
+
     def __init__(self, cfg):
         super(ICON, self).__init__()
 
@@ -135,6 +134,7 @@ class ICON(pl.LightningModule):
                 "params": self.netG.mlp.parameters(),
                 "lr": self.lr_G
             }]
+        
      
         optim_params_G.append({
             "params": self.netG.image_filter.parameters(),
@@ -146,7 +146,13 @@ class ICON(pl.LightningModule):
                 "params": self.netG.F_filter.parameters(),
                 "lr": self.lr_G
             })
-      
+            
+            # # lyz GTA
+            # optim_params_G.append({
+            #     "params": self.netG.refine_filter.parameters(),
+            #     "lr": self.lr_G
+            # })
+
             pass
             
 
@@ -193,11 +199,13 @@ class ICON(pl.LightningModule):
 
         self.netG.train()
 
+        # lyz add for  "occ_label"  "pic_name"
         in_tensor_dict = {
             "sample": batch["samples_geo"].permute(0, 2, 1),
             "calib": batch["calib"],
             "label": batch["labels_geo"].unsqueeze(1),
-           
+            "occ_label": batch["labels_occ"].unsqueeze(1),
+            "pic_name": batch['subject'][0] + str(batch['rotation']),
             "sample_color": batch["samples_color"].permute(0, 2, 1),
             "color": batch["color_labels"].permute(0, 2, 1),
            
@@ -279,12 +287,18 @@ class ICON(pl.LightningModule):
 
         self.netG.eval()
         self.netG.training = False
-
+        # lyz add for d_if
+        # yxt add for learnable alpha
+        # batch["labels_geo"] = 1.0/(1+ torch.exp(self.sigmoid_beta*batch["labels_geo"]))
+        
+        # lyz add for "occ_label" "pic_name"
+        
         in_tensor_dict = {
             "sample": batch["samples_geo"].permute(0, 2, 1),
             "calib": batch["calib"],
             "label": batch["labels_geo"].unsqueeze(1),
-            
+            "occ_label": batch["labels_occ"].unsqueeze(1),
+            "pic_name": batch['subject'][0] + str(batch['rotation']),
             "sample_color": batch["samples_color"].permute(0, 2, 1),
             "color": batch["color_labels"].permute(0, 2, 1),
            
@@ -508,9 +522,10 @@ class ICON(pl.LightningModule):
 
             optimizer_cloth.zero_grad()
 
+            #lyz add unsqueeze(0)
             self.render.load_meshes(
-                verts_pr.to(self.device),
-                faces_pr.to(self.device).long(),
+                verts_pr.unsqueeze(0).to(self.device),
+                faces_pr.unsqueeze(0).to(self.device).long(),
                 deform_verts,
             )
             P_normal_F, P_normal_B = self.render.get_rgb_image()
@@ -674,9 +689,17 @@ class ICON(pl.LightningModule):
         verts_gt = batch["verts"][0]
         faces_gt = batch["faces"][0]
 
+        #lyz question
+        verts_smpl = batch["smpl_verts"] * torch.tensor([1.0, -1.0, 1.0]).to(self.device)
+        faces_smpl = batch["smpl_faces"][0]
+
         self.result_eval.update({
             "verts_gt": verts_gt,
             "faces_gt": faces_gt,
+            #lyz question
+            "verts_smpl": verts_smpl[0],
+            "faces_smpl": faces_smpl,
+            #lyz question
             "verts_pr": verts_pr,
             "faces_pr": faces_pr,
             "recon_size": (self.resolutions[-1] - 1.0),
@@ -726,6 +749,10 @@ class ICON(pl.LightningModule):
                 "cape-hard": (50, 150)
             },
         )
+        
+        # lyz add for d_IF
+        print(colored(self.cfg.name, "green"))
+        print(colored(self.cfg.dataset.noise_scale, "green"))
         self.logger.experiment.add_hparams(
             hparam_dict={
                 "lr_G": self.lr_G,
@@ -798,10 +825,7 @@ class ICON(pl.LightningModule):
             )
 
     def test_single(self, batch):
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-        # 将模型及其子模块移动到设备
-        self.netG.to(device)
         self.netG.eval()
         self.netG.training = False
         in_tensor_dict = {}
@@ -814,7 +838,7 @@ class ICON(pl.LightningModule):
             k: batch[k] if k in batch.keys() else None
             for k in getattr(self, f"{self.prior_type}_keys")
         })
-        in_tensor_dict = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in in_tensor_dict.items()}
+
         with torch.no_grad():
             features, inter = self.netG.filter(in_tensor_dict,
                                                return_inter=True)
@@ -836,3 +860,58 @@ class ICON(pl.LightningModule):
         verts_pr /= (self.resolutions[-1] - 1) / 2.0
 
         return verts_pr, faces_pr, inter
+
+        # lyz GTA
+        def test_motion_sequence(self, batch, smpl_seq):
+         
+         '''
+         smpl_seq: [N, 6890, 3] deformed smpl verts
+         '''
+
+         self.netG.eval()
+         self.netG.training = False
+         in_tensor_dict = {}
+         
+         for name in self.in_total:
+            if name in batch.keys():
+                in_tensor_dict.update({name: batch[name]})
+
+        in_tensor_dict.update({
+            k: batch[k] if k in batch.keys() else None
+            for k in getattr(self, f"{self.prior_type}_keys")
+        })
+
+        mesh_list=[]
+        face_list=[]
+        num=smpl_seq.shape[0]
+        with torch.no_grad():
+            features, inter = self.netG.filter(in_tensor_dict,
+                                            return_inter=True)
+            for i in range(smpl_seq.shape[0]):
+                print(f"The {i} th mesh. {num} in total.\n")
+                animated_smpl = smpl_seq[i]
+                in_tensor_dict.update({
+                    'animated_smpl_verts': animated_smpl.unsqueeze(0),
+                })
+                self.netG.update_SMPL(in_tensor_dict)
+                sdf = self.reconEngine(opt=self.cfg,
+                                    netG=self.netG,
+                                    features=features,
+                                    proj_matrix=None)
+
+                verts_pr, faces_pr = self.reconEngine.export_mesh(sdf)
+
+                if self.clean_mesh_flag:
+                    verts_pr, faces_pr = clean_mesh(verts_pr, faces_pr)
+
+                verts_pr -= (self.resolutions[-1] - 1) / 2.0
+                verts_pr /= (self.resolutions[-1] - 1) / 2.0
+
+                mesh_list.append(verts_pr)
+                face_list.append(faces_pr)
+
+        return mesh_list, face_list
+    
+
+
+    

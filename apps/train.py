@@ -50,6 +50,10 @@ if __name__ == "__main__":
         cfg.merge_from_list(cfg_overfit_list)
         save_k = 0
 
+# 用于在训练过程中保存模型的检查点（checkpoint）。
+# 这里的 ModelCheckpoint 回调被配置为在验证集（validation set）上的某个指标达到最佳时，
+# 或者在每个训练周期（epoch）结束时保存模型的权重
+
     checkpoint = ModelCheckpoint(
         dirpath=osp.join(cfg.ckpt_dir, cfg.name),
         save_top_k=1,
@@ -60,6 +64,18 @@ if __name__ == "__main__":
         mode="min",
         filename="{epoch:02d}",
     )
+    
+    # loss--min  acc--max  
+    # lyz D_IF checkpoint
+    # checkpoint = ModelCheckpoint(
+    #     dirpath=osp.join(cfg.ckpt_dir, cfg.name),
+    #     save_top_k=1,
+    #     verbose=False,
+    #     save_weights_only=True,
+    #     monitor="val/avgacc",
+    #     mode="max",
+    #     filename="{epoch:02d}",
+    # )
 
     if cfg.test_mode or args.test_mode:
 
@@ -99,10 +115,8 @@ if __name__ == "__main__":
         "num_sanity_val_steps": cfg.num_sanity_val_steps,
         "checkpoint_callback": checkpoint,
         "limit_train_batches": cfg.dataset.train_bsize,
-        "limit_val_batches":
-        cfg.dataset.val_bsize if not cfg.overfit else 0.001,
-        "limit_test_batches":
-        cfg.dataset.test_bsize if not cfg.overfit else 0.0,
+        "limit_val_batches": cfg.dataset.val_bsize if not cfg.overfit else 0.001,
+        "limit_test_batches": cfg.dataset.test_bsize if not cfg.overfit else 0.0,
         "profiler": None,
         "fast_dev_run": cfg.fast_dev,
         "max_epochs": cfg.num_epoch,
